@@ -10,8 +10,8 @@ import (
 
 const (
 	// DefaultBufferSize is the first-time allocation on a ring-buffer.
-	DefaultBufferSize   = 1024     // 1KB
-	bufferGrowThreshold = 4 * 1024 // 4KB
+	DefaultBufferSize   = 1024                  // 1KB
+	bufferGrowThreshold = 4 * DefaultBufferSize // 4KB
 )
 
 // TCPReadBufferSize is the default read buffer size for each TCP socket.
@@ -20,31 +20,34 @@ var TCPReadBufferSize = 64 * 1024 // 64KB
 // ErrIsEmpty will be returned when trying to read an empty ring-buffer.
 var ErrIsEmpty = errors.New("ring-buffer is empty")
 
-// RingBuffer is a circular buffer that implement io.ReaderWriter interface.
+// RingBuffer is a circular buffer that implement io.ReadWriter interface.
 type RingBuffer struct {
 	bs      [][]byte
 	buf     []byte
-	size    int
+	size    int // 可用空间
 	r       int // next position to read
-	w       int // next position to write
+	w       int // next position to write 游标 w 永远大于游标 r 如果出现 w < r 则表示缓冲区已经写了一圈
 	isEmpty bool
 }
 
 // EmptyRingBuffer can be used as a placeholder for those closed connections.
-var EmptyRingBuffer = New(0)
+var EmptyRingBuffer, _ = New(0)
 
 // New returns a new RingBuffer whose buffer has the given size.
-func New(size int) *RingBuffer {
+func New(size int) (*RingBuffer, error) {
 	if size == 0 {
-		return &RingBuffer{bs: make([][]byte, 2), isEmpty: true}
+		return &RingBuffer{bs: make([][]byte, 2), isEmpty: true}, nil
 	}
-	size = math.CeilToPowerOfTwo(size)
+	size, err := math.CeilToPowerOfTwo(size)
+	if err != nil {
+		return nil, err
+	}
 	return &RingBuffer{
 		bs:      make([][]byte, 2),
 		buf:     make([]byte, size),
 		size:    size,
 		isEmpty: true,
-	}
+	}, nil
 }
 
 // Peek returns the next n bytes without advancing the read pointer.
@@ -271,7 +274,9 @@ func (rb *RingBuffer) Cap() int {
 }
 
 // Free returns the length of available bytes to write.
+//
 func (rb *RingBuffer) Free() int {
+	// 如果游标 r 的位置和游标 w 的位置相同，并且缓冲区为空，则可用空间就是总长度
 	if rb.r == rb.w {
 		if rb.isEmpty {
 			return rb.size
@@ -279,10 +284,12 @@ func (rb *RingBuffer) Free() int {
 		return 0
 	}
 
+	// 如果游标 r 先于游标 w 则表示游标 w 已经写了一圈，此时可用空间为 r 的位置 - w 的位置
 	if rb.w < rb.r {
 		return rb.r - rb.w
 	}
 
+	// 否则，可用空间为：总大小 - (w-r)
 	return rb.size - rb.w + rb.r
 }
 
@@ -363,20 +370,29 @@ func (rb *RingBuffer) Reset() {
 	rb.r, rb.w = 0, 0
 }
 
-func (rb *RingBuffer) grow(newCap int) {
+func (rb *RingBuffer) grow(newCap int) error {
+	// 如果总大小为0
 	if n := rb.size; n == 0 {
 		if newCap <= DefaultBufferSize {
 			newCap = DefaultBufferSize
 		} else {
-			newCap = math.CeilToPowerOfTwo(newCap)
+			_cap, err := math.CeilToPowerOfTwo(newCap)
+			if err != nil {
+				return err
+			}
+			newCap = _cap
 		}
 	} else {
 		doubleCap := n + n
+		// 如果申请的新空间小于 2 倍总大小，则替换
 		if newCap <= doubleCap {
+			// 如果 n 在阈值之内，则直接设定 2 倍空间
 			if n < bufferGrowThreshold {
 				newCap = doubleCap
 			} else {
+				// 否则按照 1/4 总大小增长
 				// Check 0 < n to detect overflow and prevent an infinite loop.
+				// 如果已使用空间 n 小于申请的新空间，则进行一次 1/4 增长，直到 n 大于 申请的新空间
 				for 0 < n && n < newCap {
 					n += n / 4
 				}
@@ -394,4 +410,6 @@ func (rb *RingBuffer) grow(newCap int) {
 	rb.r = 0
 	rb.w = oldLen
 	rb.size = newCap
+
+	return nil
 }

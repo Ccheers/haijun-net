@@ -28,7 +28,7 @@ import (
 )
 
 func TestRingBuffer_Write(t *testing.T) {
-	rb := New(64)
+	rb, _ := New(64)
 
 	_, err := rb.ReadByte()
 	assert.ErrorIs(t, err, ErrIsEmpty, "expect nil err, but got nil")
@@ -116,7 +116,7 @@ func TestRingBuffer_Write(t *testing.T) {
 }
 
 func TestZeroRingBuffer(t *testing.T) {
-	rb := New(0)
+	rb, _ := New(0)
 	head, tail := rb.Peek(2)
 	assert.Empty(t, head, "head should be empty")
 	assert.Empty(t, tail, "tail should be empty")
@@ -136,7 +136,7 @@ func TestZeroRingBuffer(t *testing.T) {
 }
 
 func TestRingBufferGrow(t *testing.T) {
-	rb := New(0)
+	rb, _ := New(0)
 	head, tail := rb.Peek(2)
 	assert.Empty(t, head, "head should be empty")
 	assert.Empty(t, tail, "tail should be empty")
@@ -153,7 +153,7 @@ func TestRingBufferGrow(t *testing.T) {
 	assert.EqualValues(t, DefaultBufferSize-1, rb.Free())
 	assert.EqualValues(t, data, rb.ByteBuffer().Bytes())
 
-	rb = New(DefaultBufferSize)
+	rb, _ = New(DefaultBufferSize)
 	newData := make([]byte, 3*512)
 	n, err = rand.Read(newData)
 	assert.NoError(t, err, "failed to generate random data")
@@ -195,7 +195,7 @@ func TestRingBufferGrow(t *testing.T) {
 }
 
 func TestRingBuffer_Read(t *testing.T) {
-	rb := New(64)
+	rb, _ := New(64)
 
 	// check empty or full
 	assert.True(t, rb.IsEmpty(), "expect IsEmpty is true but got false")
@@ -261,7 +261,7 @@ func TestRingBuffer_Read(t *testing.T) {
 }
 
 func TestRingBuffer_ByteInterface(t *testing.T) {
-	rb := New(2)
+	rb, _ := New(2)
 
 	// write one
 	_ = rb.WriteByte('a')

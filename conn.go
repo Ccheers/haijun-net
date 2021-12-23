@@ -3,6 +3,7 @@ package haijun_net
 import (
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Ccheers/haijun-net/internal/io"
@@ -10,17 +11,23 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var connPoller poller.Poller
 var connOnce sync.Once
 
+type connManager struct {
+	connMap sync.Map
+	poller  poller.Poller
+}
+
+func newConnManager(poller poller.Poller) *connManager {
+	return &connManager{poller: poller}
+}
+
 type HjConn struct {
-	fd              int
-	localAddr       net.Addr
-	remoteAddr      net.Addr
-	readDeadline    time.Time
-	readDeadlineMu  sync.RWMutex
-	writeDeadline   time.Time
-	writeDeadlineMu sync.RWMutex
+	fd            int
+	localAddr     net.Addr
+	remoteAddr    net.Addr
+	readDeadline  atomic.Value
+	writeDeadline atomic.Value
 }
 
 func NewHjConn(fd int, localAddr, remoteAddr net.Addr) net.Conn {
@@ -61,23 +68,19 @@ func (h *HjConn) SetDeadline(t time.Time) error {
 }
 
 func (h *HjConn) SetReadDeadline(t time.Time) error {
-	h.readDeadlineMu.Lock()
-	h.readDeadline = t
-	h.readDeadlineMu.Unlock()
+	h.readDeadline.Store(t)
 	return nil
 }
 
 func (h *HjConn) SetWriteDeadline(t time.Time) error {
-	h.writeDeadlineMu.Lock()
-	h.writeDeadline = t
-	h.writeDeadlineMu.Unlock()
+	h.writeDeadline.Store(t)
 	return nil
 }
 
 func initConnPoller() {
-	var err error
-	connPoller, err = poller.NewPoller()
+	connPoller, err := poller.NewPoller()
 	if err != nil {
 		panic(err)
 	}
+	newConnManager(connPoller)
 }
