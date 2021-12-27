@@ -1,4 +1,4 @@
-## ACCEPT 实现细节
+## ACCEPT 实现细节(read、write基本同理)
 
 #### net/fd_unix.go
 
@@ -277,7 +277,9 @@ func sysmon() {
 
 
 
-## Gnet init
+## Gnet 实现细节
+
+### Gnet init
 
 ```mermaid
 graph LR
@@ -287,7 +289,7 @@ epoll==>|注册listen fd 的 read 事件|accept
 
 
 
-## Gnet accept
+### Gnet accept
 
 ```mermaid
 graph LR 
@@ -302,7 +304,7 @@ newTCPConn==>|注册 accept fd 的 read 事件|handleEvents==>subepoll
 
 
 
-## Gnet read
+### Gnet read
 
 ```mermaid
 graph LR
@@ -315,7 +317,7 @@ loopRead==>|CopyFromSocket|inboundBuffer===>|decode packet|reactHandler
 
 
 
-## Gnet write
+### Gnet write
 
 
 
@@ -332,4 +334,66 @@ epoll===>handleEvent==>loopWrite==>write
 
 ```
 
+## Gnet组件
+
+### loadblancer 负载均衡器
+
+**注册时，根据特定算法注册进事件循环器。**
+
+```go
+// loadBalancer is a interface which manipulates the event-loop set.
+loadBalancer interface {
+  register(*eventloop) // 将事件循环器，注册进负载均衡器
+  next(net.Addr) *eventloop // 根据 addr 获取一个负载均衡器
+  iterate(func(int, *eventloop) bool) // 遍历负载均衡器集合
+  len() int // 获取负载均衡器大小
+}
+```
+
+### event loop 事件循环调度器
+
+**将FD的IO事件监听以及回调函数注册进事件循环，事件循环有IO事件发生时，触发对应FD的回调**
+
+```go
+type eventloop struct {
+   ln           *listener       // listener 监听的 pollerfd
+   idx          int             // loop index in the server loops list 负载均衡器内的下标
+   svr          *server         // server in loop // server 的一个指针
+   poller       *netpoll.Poller // epoll or kqueue // poller 调度器
+   buffer       []byte          // read packet buffer whose capacity is set by user, default value is 64KB 缓冲区 用于 udp 连接
+   connCount    int32           // number of active connections in event-loop 事件循环器管理的连接数
+   udpSockets   map[int]*conn   // client-side UDP socket map: fd -> conn UDP连接集合
+   connections  map[int]*conn   // TCP connection map: fd -> conn TCP连接集合
+   eventHandler EventHandler    // user eventHandler // 处理回调，在各种事件触发时触发的一些回调
+}
+```
+
+### Poller 文件描述符的IO事件监听装置
+
+**poller 是一个基于epoll的io事件监听器，将文件描述符注册进这里，当文件描述符有io事件发生时，会返回对应的文件描述符集合**
+
+```go
+// Poller represents a poller which is in charge of monitoring file-descriptors.
+type Poller struct {
+   fd                  int    // epoll fd 
+   wfd                 int    // wake fd 唤醒事件循环的fd，用于触发任务队列
+   wfdBuf              []byte // wfd buffer to read packet // wfd 的缓冲区
+   netpollWakeSig      int32 // 激活 epoll 的信号 1 是激活信号
+   asyncTaskQueue      queue.AsyncTaskQueue // queue with low priority 异步队列
+   priorAsyncTaskQueue queue.AsyncTaskQueue // queue with high priority 高优先级的异步队列
+}
+
+type poller interface {
+  Close() error 
+  UrgentTrigger(fn queue.TaskFunc, arg interface{}) (err error) // 将任务加入高优先级的异步队列
+  Trigger(fn queue.TaskFunc, arg interface{}) (err error) // 将任务加入异步队列
+  Polling(callback func(fd int, ev uint32) error) error // 监听已注册的fd，当有io事件的时候，触发传入的回调函数
+  AddReadWrite(pa *PollAttachment) error 
+  AddRead(pa *PollAttachment) error 
+  AddWrite(pa *PollAttachment) error 
+  ModRead(pa *PollAttachment) error 
+  ModReadWrite(pa *PollAttachment) error 
+  Delete(fd int) error 
+}
+```
 
