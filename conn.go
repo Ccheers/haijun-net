@@ -1,26 +1,21 @@
 package haijun_net
 
 import (
+	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/Ccheers/haijun-net/internal/io"
+	"github.com/Ccheers/haijun-net/internal/pkg/mixedbuffer"
+	rbPool "github.com/Ccheers/haijun-net/internal/pkg/pool/ringbuffer"
+	"github.com/Ccheers/haijun-net/internal/pkg/ringbuffer"
 	"github.com/Ccheers/haijun-net/internal/poller"
 	"golang.org/x/sys/unix"
 )
 
 var connOnce sync.Once
-
-type connManager struct {
-	connMap sync.Map
-	poller  poller.Poller
-}
-
-func newConnManager(poller poller.Poller) *connManager {
-	return &connManager{poller: poller}
-}
+var manager *connManager
 
 type HjConn struct {
 	fd            int
@@ -28,26 +23,55 @@ type HjConn struct {
 	remoteAddr    net.Addr
 	readDeadline  atomic.Value
 	writeDeadline atomic.Value
+
+	readBuffer  *ringbuffer.RingBuffer
+	waitRead    chan struct{}
+	writeBuffer *mixedbuffer.Buffer
+
+	manager *connManager
 }
 
-func NewHjConn(fd int, localAddr, remoteAddr net.Addr) net.Conn {
+func NewHjConn(fd int, localAddr, remoteAddr net.Addr) (net.Conn, error) {
 	connOnce.Do(initConnPoller)
-	return &HjConn{
-		fd:         fd,
-		localAddr:  localAddr,
-		remoteAddr: remoteAddr,
+	conn := &HjConn{
+		fd:            fd,
+		localAddr:     localAddr,
+		remoteAddr:    remoteAddr,
+		readDeadline:  atomic.Value{},
+		writeDeadline: atomic.Value{},
+		readBuffer:    rbPool.GetWithSize(ringbuffer.MaxStreamBufferCap),
+		waitRead:      make(chan struct{}, 1),
+		writeBuffer:   mixedbuffer.New(ringbuffer.MaxStreamBufferCap),
+		manager:       manager,
 	}
+	err := conn.manager.RegisterConn(conn)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+	return conn, nil
 }
 
 func (h *HjConn) Read(b []byte) (n int, err error) {
-	return io.Read(h.fd, b)
+	if h.readBuffer.IsEmpty() {
+		<-h.waitRead
+	}
+	return h.readBuffer.Read(b)
 }
 
 func (h *HjConn) Write(b []byte) (n int, err error) {
-	return io.Write(h.fd, b)
+	err = h.manager.ModWrite(h)
+	if err != nil {
+		return
+	}
+	return h.writeBuffer.Write(b)
 }
 
 func (h *HjConn) Close() error {
+	h.readBuffer.Reset()
+	rbPool.Put(h.readBuffer)
+	h.writeBuffer.Release()
+
 	return unix.Close(h.fd)
 }
 
@@ -82,5 +106,15 @@ func initConnPoller() {
 	if err != nil {
 		panic(err)
 	}
-	newConnManager(connPoller)
+	manager = newConnManager(connPoller)
+	go func() {
+		//defer func() {
+		//	// recover
+		//	err := recover()
+		//	if err != nil {
+		//		log.Println(errors.New(fmt.Sprintf("%v", err)))
+		//	}
+		//}()
+		manager.Run()
+	}()
 }

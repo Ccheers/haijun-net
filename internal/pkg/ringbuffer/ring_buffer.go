@@ -4,8 +4,8 @@ import (
 	"errors"
 
 	"github.com/Ccheers/haijun-net/internal/pkg/bsconv"
-	"github.com/Ccheers/haijun-net/internal/pkg/bytebufferpool"
 	"github.com/Ccheers/haijun-net/internal/pkg/math"
+	"github.com/Ccheers/haijun-net/internal/pkg/pool/bytebuffer"
 )
 
 const (
@@ -14,8 +14,8 @@ const (
 	bufferGrowThreshold = 4 * DefaultBufferSize // 4KB
 )
 
-// TCPReadBufferSize is the default read buffer size for each TCP socket.
-var TCPReadBufferSize = 64 * 1024 // 64KB
+// MaxStreamBufferCap is the default buffer size for each stream-oriented connection(TCP/Unix).
+var MaxStreamBufferCap = 64 * 1024 // 64KB
 
 // ErrIsEmpty will be returned when trying to read an empty ring-buffer.
 var ErrIsEmpty = errors.New("ring-buffer is empty")
@@ -299,17 +299,17 @@ func (rb *RingBuffer) WriteString(s string) (int, error) {
 }
 
 // ByteBuffer returns all available read bytes. It does not move the read pointer and only copy the available data.
-func (rb *RingBuffer) ByteBuffer() *bytebufferpool.ByteBuffer {
+func (rb *RingBuffer) ByteBuffer() *bytebuffer.ByteBuffer {
 	if rb.isEmpty {
 		return nil
 	} else if rb.w == rb.r {
-		bb := bytebufferpool.Get()
+		bb := bytebuffer.Get()
 		_, _ = bb.Write(rb.buf[rb.r:])
 		_, _ = bb.Write(rb.buf[:rb.w])
 		return bb
 	}
 
-	bb := bytebufferpool.Get()
+	bb := bytebuffer.Get()
 	if rb.w > rb.r {
 		_, _ = bb.Write(rb.buf[rb.r:rb.w])
 		return bb
@@ -326,18 +326,18 @@ func (rb *RingBuffer) ByteBuffer() *bytebufferpool.ByteBuffer {
 
 // WithByteBuffer combines the available read bytes and the given bytes. It does not move the read pointer and
 // only copy the available data.
-func (rb *RingBuffer) WithByteBuffer(b []byte) *bytebufferpool.ByteBuffer {
+func (rb *RingBuffer) WithByteBuffer(b []byte) *bytebuffer.ByteBuffer {
 	if rb.isEmpty {
-		return &bytebufferpool.ByteBuffer{B: b}
+		return &bytebuffer.ByteBuffer{B: b}
 	} else if rb.w == rb.r {
-		bb := bytebufferpool.Get()
+		bb := bytebuffer.Get()
 		_, _ = bb.Write(rb.buf[rb.r:])
 		_, _ = bb.Write(rb.buf[:rb.w])
 		_, _ = bb.Write(b)
 		return bb
 	}
 
-	bb := bytebufferpool.Get()
+	bb := bytebuffer.Get()
 	if rb.w > rb.r {
 		_, _ = bb.Write(rb.buf[rb.r:rb.w])
 		_, _ = bb.Write(b)
